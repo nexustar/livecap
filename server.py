@@ -228,10 +228,17 @@ SENTENCE_IDLE_FLUSH_SEC = 5.0
 # (~5–8 B/word), while "chars/word" differs by ~5×. Using bytes gives a
 # consistent "fire on ~a phrase of new content" semantics regardless of
 # source language. 24 ≈ 5 English words or 8 CJK characters.
-# 2s interval keeps the partial responsive enough to feel live while
-# leaving headroom for the translation API (~300–800ms per call) to
-# complete one revision before the next fires.
-PARTIAL_INTERVAL_SEC = 2.0
+# HARD_FLOOR is the only wall-clock gate left: it exists to bound API call
+# rate (and prevent runaway cost on a chatty cloud ASR), nothing else. The
+# real throttle is now "previous partial finished" — see _maybe_trigger_partial.
+# Why this matters: a fixed 2s interval was prone to phase-locking against
+# bursty ASR backends (qwen-small / voxtral / openai-realtime whisper all
+# emit text in ~2s batches). When the two periods aligned within jitter,
+# every other partial got skipped — effective interval doubled to ~4s.
+# The vsync-style gate (drop if last partial still in flight) makes the
+# partial cadence track whichever is slower of (ASR batch rate, translator
+# round-trip), with no fixed periodicity to beat against.
+PARTIAL_HARD_FLOOR_SEC = 0.4
 PARTIAL_MIN_NEW_BYTES = 24
 
 # Skip audio chunks whose absolute peak is below this. Catches the case
@@ -1948,7 +1955,12 @@ class Pipeline:
         anthropic- and openai-SDK backends (Claude variants, DeepSeek,
         OpenAI direct, OpenRouter/ollama/etc.) where the per-call cost is
         low enough to spam mid-sentence. Skipped for Gemini (uses its own
-        streaming flow) and `none` (no translation)."""
+        streaming flow) and `none` (no translation).
+
+        Pacing model is vsync-like: gate on "previous partial finished",
+        not on a fixed wall-clock interval. This avoids phase-locking
+        against bursty ASR backends — see PARTIAL_HARD_FLOOR_SEC comment
+        for the failure mode the fixed-interval version had."""
         backend_cfg = _get_translate_backend(self.translate_backend) or {}
         if backend_cfg.get("sdk") not in ("anthropic", "openai"):
             return
@@ -1956,15 +1968,25 @@ class Pipeline:
         if not text_now:
             return
         now = time.monotonic()
-        if now - self.last_partial_time < PARTIAL_INTERVAL_SEC:
+        # Hard floor: bound API call rate even if both ASR and translator
+        # are absurdly fast. Anything below ~400ms is also imperceptible to
+        # the user anyway (caption flashing faster than they can read).
+        if now - self.last_partial_time < PARTIAL_HARD_FLOOR_SEC:
+            return
+        # vsync gate: if the previous partial hasn't finished translating,
+        # drop this trigger. The next ASR event after completion will pick
+        # it up. This is the "consumer paces to producer" property — partial
+        # frequency = min(ASR rate, 1 / translator RTT), with no fixed
+        # period for ASR cadence to beat against.
+        # Was: cancel-and-restart. Removed because on continuous fast ASR
+        # (gemini token-by-token) a slow translator could be cancelled
+        # forever — partial never completed, user saw nothing until final.
+        if self.in_flight_partial and not self.in_flight_partial.done():
             return
         # UTF-8 bytes (not code points) — see PARTIAL_MIN_NEW_BYTES comment.
         buf_bytes = len(self.sentence_buffer.encode("utf-8"))
         if buf_bytes - self.last_partial_buf_len < PARTIAL_MIN_NEW_BYTES:
             return
-        # Cancel any in-flight partial; the new revision supersedes it.
-        if self.in_flight_partial and not self.in_flight_partial.done():
-            self.in_flight_partial.cancel()
         self.last_partial_time = now
         self.last_partial_buf_len = buf_bytes
         sid = self.next_sid
