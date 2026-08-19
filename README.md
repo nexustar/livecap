@@ -22,9 +22,9 @@ underlying pipeline supports.
 
 ## Setup
 
-**Prereqs:** Python 3.11+, [`uv`](https://github.com/astral-sh/uv), and a
-modern browser. Tested on macOS and Linux; Windows is untested (Path C
-likely works as-is; Path A/B need WSL for the local C builds).
+**Prereqs:** Node 20+, npm, and a modern browser. Tested on macOS and
+Linux; Windows is untested (Path C likely works as-is; Path A/B need WSL
+for the local C builds).
 
 Three paths depending on what you want. Pick one and follow it top to
 bottom, then start the server.
@@ -97,8 +97,8 @@ ANTHROPIC_API_KEY=sk-ant-...
 ```bash
 git clone <repo> && cd livesub
 cp .env.example .env       # then edit per your chosen path above
-uv sync
-uv run python server.py    # http://0.0.0.0:8000
+npm install
+npm start                  # http://0.0.0.0:8000
 ```
 
 ### Higher-quality local alternatives
