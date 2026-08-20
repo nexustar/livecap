@@ -121,7 +121,7 @@ function populateBackendSelect(sel, items, savedValue) {
 async function loadBackends() {
   let data;
   try {
-    const res = await fetch("/api/backends");
+    const res = await fetch("api/backends");
     data = await res.json();
   } catch (e) {
     console.error("failed to fetch /api/backends", e);
@@ -162,7 +162,7 @@ async function generateHintsFromScene() {
   hintStatusEl.textContent = "Researching (may take 5–15s)…";
   hintStatusEl.className = "muted busy";
   try {
-    const res = await fetch("/api/hints", {
+    const res = await fetch("api/hints", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -542,7 +542,7 @@ async function start() {
       audioCtx = new AudioContext();
     }
     console.log(`AudioContext: ${audioCtx.sampleRate}Hz (worklet will resample to ${targetRate}Hz)`);
-    await audioCtx.audioWorklet.addModule("/static/pcm-worklet.js");
+    await audioCtx.audioWorklet.addModule("static/pcm-worklet.js");
     sourceNode = audioCtx.createMediaStreamSource(stream);
     workletNode = new AudioWorkletNode(audioCtx, "pcm-worklet", {
       processorOptions: { targetRate },
@@ -559,8 +559,11 @@ async function start() {
     startVU();
 
     setStatus("connecting…");
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    ws = new WebSocket(`${proto}://${location.host}/ws`);
+    // Resolve the /ws endpoint relative to the page's base URI so the app works
+    // under a non-root path (reverse-proxy subpath), not just at the domain root.
+    const wsBase = new URL("ws", document.baseURI);
+    const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
+    ws = new WebSocket(`${wsProto}//${wsBase.host}${wsBase.pathname}`);
     ws.binaryType = "arraybuffer";
 
     ws.onopen = () => {
