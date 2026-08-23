@@ -1,13 +1,39 @@
 {
   "name": "livesub",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Real-time bilingual live caption server",
+  "license": "MIT",
+  "author": "nexustar",
   "type": "module",
-  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "livesub": "bin/livesub.mjs"
+  },
+  "files": [
+    "dist",
+    "static",
+    "bin",
+    ".env.example",
+    "livesub.toml.example"
+  ],
+  "keywords": [
+    "asr",
+    "speech-to-text",
+    "live-captions",
+    "subtitles",
+    "translation",
+    "bilingual",
+    "qwen",
+    "websocket"
+  ],
   "scripts": {
     "start": "tsx src/server.ts",
     "dev": "tsx watch src/server.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "prepack": "tsc"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",

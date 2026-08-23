@@ -3,8 +3,7 @@
 // directly (no framework), matching the project's "one server file" ethos.
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { createReadStream } from "node:fs";
-import { statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
 import { GoogleGenAI } from "@google/genai";
@@ -53,23 +52,17 @@ function serveStatic(res: ServerResponse, rel: string): void {
     res.writeHead(403).end("forbidden");
     return;
   }
-  let st;
+  // readFileSync (not a stream) — assets are tiny so buffering is fine, and a
+  // missing file / directory throws → 404 (no stream 'error' to crash on).
+  let buf: Buffer;
   try {
-    st = statSync(filePath);
+    buf = readFileSync(filePath);
   } catch {
     res.writeHead(404).end("not found");
     return;
   }
-  if (!st.isFile()) {
-    res.writeHead(404).end("not found");
-    return;
-  }
   res.writeHead(200, { "Content-Type": MIME[extname(filePath)] ?? "application/octet-stream" });
-  const stream = createReadStream(filePath);
-  // A read error after headers are sent can't become a 500 — abort the response
-  // instead of letting an unhandled 'error' crash the process.
-  stream.on("error", () => res.destroy());
-  stream.pipe(res);
+  res.end(buf);
 }
 
 function readBody(req: IncomingMessage, maxBytes = 1 << 20): Promise<string> {

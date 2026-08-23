@@ -1,8 +1,8 @@
-// Configuration + backend registry — the TS port of the module-level constants
-// and the _*_backends / _*_available helpers at the top of server.py. Reads the
-// same .env and livesub.toml the Python server does (resolved against the repo
-// root so `npm start` from server-ts/ sees identical config), so behaviour is
-// unchanged regardless of which server is running.
+// Configuration + backend registry — env constants, the translate-backend
+// registry (built-ins + livesub.toml), and per-backend availability checks.
+// Two path anchors: user config (.env / livesub.toml) resolves against the
+// working directory, bundled assets (static/) against the package root — see
+// ROOT and PKG_DIR below.
 
 import { accessSync, constants as fsConstants, existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
@@ -11,10 +11,14 @@ import { config as loadDotenv } from "dotenv";
 import { parse as parseToml } from "smol-toml";
 import { log } from "./util.js";
 
-// Resolve paths against the repo root (parent of server-ts/), so .env,
-// livesub.toml and static/ are the same files the Python server uses.
-const HERE = dirname(fileURLToPath(import.meta.url)); // .../src
-export const ROOT = dirname(HERE); // repo root
+const HERE = dirname(fileURLToPath(import.meta.url)); // .../src (dev) or .../dist (built)
+// Bundled assets (static/) sit next to the code — repo root in dev, package root
+// once installed (src/ and dist/ are each one level below their root).
+const PKG_DIR = dirname(HERE);
+// User config (.env / livesub.toml / relative model paths) resolves from the
+// current working directory, so an installed `livesub` reads the .env where it's
+// launched — not from inside node_modules. Overridable via LIVESUB_CONFIG_DIR.
+export const ROOT = process.env.LIVESUB_CONFIG_DIR || process.cwd();
 loadDotenv({ path: join(ROOT, ".env") });
 
 function env(key: string, def = ""): string {
@@ -33,10 +37,9 @@ function envFloat(key: string, def: string): number {
   return n;
 }
 
-// Resolve a possibly-relative path against the repo root. Python resolves
-// relative model/dir paths against the CWD (== repo root when run there); doing
-// the same here means the identical .env works regardless of which directory
-// `npm start` was invoked from.
+// Resolve a possibly-relative path against ROOT (the config dir). Relative
+// model/dir paths in .env are taken relative to where livesub is launched —
+// the same directory .env itself is read from — not the package install dir.
 export function resolveRel(p: string): string {
   if (!p) return p;
   return isAbsolute(p) ? p : join(ROOT, p);
@@ -115,7 +118,7 @@ export const TRANSLATE_BACKENDS_BUILTIN: TranslateBackend[] = [
   { id: "none", label: "None (transcript only)", sdk: "none", model: null },
 ];
 
-// Read user-defined backends from livesub.toml (repo root) if present. Skipped
+// Read user-defined backends from livesub.toml (config dir, see ROOT) if present. Skipped
 // silently when the file doesn't exist. Each entry must have id/label/sdk/model.
 function loadCustomTranslateBackends(): TranslateBackend[] {
   const cfgPath = join(ROOT, "livesub.toml");
@@ -205,7 +208,9 @@ export const VOXTRAL_INTERVAL_SEC = envFloat("VOXTRAL_INTERVAL_SEC", "2.0");
 export const QWEN_MODEL_DIR_SMALL = env("QWEN_ASR_MODEL_DIR_SMALL", "");
 export const QWEN_MODEL_DIR_LARGE = env("QWEN_ASR_MODEL_DIR_LARGE", "");
 
-export const STATIC_DIR = join(ROOT, "static");
+// Frontend assets ship with the package (next to the code). Overridable via
+// LIVESUB_STATIC_DIR.
+export const STATIC_DIR = process.env.LIVESUB_STATIC_DIR || join(PKG_DIR, "static");
 
 // Hard punctuation: cut here whenever it appears (sentence terminators).
 export const SENTENCE_PUNCT = ".!?。！？\n";
