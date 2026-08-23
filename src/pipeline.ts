@@ -256,10 +256,14 @@ export class Pipeline {
     log.info("session closed");
   }
 
+  // Awaits the flush (wsSendAsync), not fire-and-forget: a slow client now
+  // backpressures the pipeline instead of growing ws's internal send queue
+  // without bound, and async send errors resolve into the catch below rather
+  // than escaping as socket 'error' events.
   private async safeSendJson(obj: WsOut): Promise<void> {
     try {
       if (this.clientWs.readyState === WebSocket.OPEN) {
-        this.clientWs.send(JSON.stringify(obj));
+        await wsSendAsync(this.clientWs, JSON.stringify(obj));
       }
     } catch {
       /* client gone; ignore */
@@ -505,7 +509,7 @@ export class Pipeline {
       for (;;) {
         const text = await outQueue.get();
         if (text === null) return;
-        await this.onTranscriptChunk(text);
+        await this.onTranscriptText(text);
       }
     };
 
@@ -613,7 +617,7 @@ export class Pipeline {
             const t = (evt.type as string) ?? "";
             if (t === "conversation.item.input_audio_transcription.delta") {
               const delta = (evt.delta as string) ?? "";
-              if (delta) await this.onTranscriptChunk(delta);
+              if (delta) await this.onTranscriptText(delta);
             } else if (t === "conversation.item.input_audio_transcription.completed") {
               // Server VAD says this turn ended; flush as a clean boundary.
               await this.finalizePendingSentence();
@@ -878,7 +882,7 @@ export class Pipeline {
         const sc = resp.serverContent;
         if (!sc) continue;
         const it = sc.inputTranscription;
-        if (it && it.text) await this.onTranscriptChunk(it.text);
+        if (it && it.text) await this.onTranscriptText(it.text);
         if (sc.turnComplete) {
           await this.finalizePendingSentence();
           log.info("ASR turn_complete (resetting session)");
@@ -908,6 +912,26 @@ export class Pipeline {
   }
 
   // ----- transcript accumulation + sentence boundary detection -----
+
+  // Entry point for ASR text of ANY size. Node pipes do not preserve the
+  // subprocess's write boundaries — under load a single 'data' event can
+  // deliver several KB at once. onTranscriptChunk() cuts at the LAST
+  // punctuation in the buffer and dispatches once per call, so feeding a burst
+  // whole would send a multi-sentence mega-segment to translation and
+  // SENTENCE_MAX_CHARS could never engage. Slicing to <=256 chars per feed
+  // (the Python server read 256 bytes per iteration) keeps boundaries local.
+  private async onTranscriptText(text: string): Promise<void> {
+    for (let i = 0; i < text.length; ) {
+      let end = Math.min(i + 256, text.length);
+      // Don't split a surrogate pair across slices: JSON-escaped lone
+      // surrogates survive the client round-trip, but keep slices well-formed.
+      if (end < text.length && text.charCodeAt(end - 1) >= 0xd800 && text.charCodeAt(end - 1) <= 0xdbff) {
+        end -= 1;
+      }
+      await this.onTranscriptChunk(text.slice(i, end));
+      i = end;
+    }
+  }
 
   private async onTranscriptChunk(text: string): Promise<void> {
     const now = monotonic();
